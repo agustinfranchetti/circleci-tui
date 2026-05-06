@@ -7,12 +7,7 @@ talks to CircleCI through the
 [official MCP server](https://github.com/CircleCI-Public/mcp-server-circleci)
 plus the v2 REST API.
 
-> **Status: pre-release.** The npm install path requires a tagged GitHub
-> Release that hasn't been cut yet — for now, build from source (see below)
-> or wait for `v0.1.0`. The release pipeline (`goreleaser` + npm publish) is
-> wired up; it activates the moment a `v*` tag is pushed.
-
-## Install (once `v0.1.0` is out)
+## Install
 
 ```bash
 npm i -g circleci-tui
@@ -25,7 +20,13 @@ The npm package is a tiny wrapper — at install time it downloads the matching
 prebuilt binary from GitHub Releases for your OS and architecture, verifies
 the SHA256, and drops it into your `$PATH`.
 
-## Install today (build from source)
+Or via Go:
+
+```bash
+go install github.com/agustinfranchetti/circleci-tui@latest
+```
+
+## Run locally (build from source)
 
 ```bash
 git clone https://github.com/agustinfranchetti/circleci-tui
@@ -35,12 +36,6 @@ go build -o circleci-tui .
 ./circleci-tui login       # paste your Personal API Token
 ./circleci-tui config      # pick which followed projects to watch
 ./circleci-tui             # launch the live TUI
-```
-
-Or, once a Go-installable tag is up:
-
-```bash
-go install github.com/agustinfranchetti/circleci-tui@latest
 ```
 
 ## Quick start
