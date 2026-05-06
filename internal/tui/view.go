@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"github.com/agustinfranchetti/circleci-tui/internal/model"
 )
 
@@ -37,30 +35,19 @@ func (m Model) View() string {
 	return b.String()
 }
 
-// renderMainBody is the tree (left) plus the optional log panel (right). When
-// the panel is closed it's just the tree at full width. When the panel's open
-// and the terminal is wide enough we split 50/50; below the panel's minimum
-// width we hide the tree and let the panel take the whole row.
+// renderMainBody shows either the tree or the log panel — never both. The
+// previous side-by-side split caused tree lines to word-wrap mid-job-name once
+// the panel ate half the width; a full-screen panel keeps log reading roomy
+// and the tree wrap-free. Press `e` to toggle.
 func (m Model) renderMainBody() string {
+	if m.logs.open {
+		return m.logs.render(m.Theme)
+	}
 	tree := m.renderTree()
 	if tree == "" && m.Tree.HasFilters() {
 		tree = m.Theme.Muted.Render("no pipelines match the current filter")
 	}
-	if !m.logs.open {
-		return tree
-	}
-	pw, _ := m.panelDimensions()
-	panel := m.logs.render(m.Theme)
-	if pw == m.Width {
-		// Narrow terminal — panel only.
-		return panel
-	}
-	treeW := m.Width - pw - 1
-	if treeW < 20 {
-		return panel
-	}
-	left := lipgloss.NewStyle().Width(treeW).Render(tree)
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", panel)
+	return tree
 }
 
 func (m Model) renderTitle() string {

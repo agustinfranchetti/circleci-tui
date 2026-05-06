@@ -37,11 +37,24 @@ type Tree struct {
 	mineActor string
 }
 
+// NewTree builds a tree where every pipeline is collapsed by default but
+// project headers stay open. The user lands on a compact list — one row per
+// pipeline per project — instead of a screen-blowing list of every job in
+// every recent run. Press ⏎/space on a pipeline to expand its job DAG.
+//
+// AdoptCollapsedFrom carries the user's expand/collapse choices forward across
+// refreshes, so this default only governs the initial state.
 func NewTree(projects []Project) *Tree {
-	return &Tree{
+	t := &Tree{
 		Projects:  projects,
 		collapsed: make(map[string]bool),
 	}
+	for _, proj := range projects {
+		for _, pl := range proj.Pipelines {
+			t.collapsed[pipelineKey(pl)] = true
+		}
+	}
+	return t
 }
 
 // AdoptCollapsedFrom copies the previous tree's collapsed state into this one.
@@ -213,6 +226,40 @@ func (t *Tree) Up() {
 func (t *Tree) Down() {
 	if t.cursor < len(t.Visible())-1 {
 		t.cursor++
+	}
+}
+
+// PageUp / PageDown move the cursor by n rows, clamped to the visible range.
+func (t *Tree) PageUp(n int) {
+	if n < 1 {
+		n = 1
+	}
+	t.cursor -= n
+	if t.cursor < 0 {
+		t.cursor = 0
+	}
+}
+
+func (t *Tree) PageDown(n int) {
+	if n < 1 {
+		n = 1
+	}
+	last := len(t.Visible()) - 1
+	if last < 0 {
+		t.cursor = 0
+		return
+	}
+	t.cursor += n
+	if t.cursor > last {
+		t.cursor = last
+	}
+}
+
+func (t *Tree) GotoTop() { t.cursor = 0 }
+
+func (t *Tree) GotoBottom() {
+	if last := len(t.Visible()) - 1; last >= 0 {
+		t.cursor = last
 	}
 }
 

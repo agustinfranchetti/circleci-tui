@@ -176,6 +176,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Tree.Up()
 		case key.Matches(msg, m.Keys.Down):
 			m.Tree.Down()
+		case msg.String() == "pgdown" || msg.String() == "ctrl+d":
+			m.Tree.PageDown(m.treeHeight() / 2)
+		case msg.String() == "pgup" || msg.String() == "ctrl+u":
+			m.Tree.PageUp(m.treeHeight() / 2)
+		case msg.String() == "home" || msg.String() == "g":
+			m.Tree.GotoTop()
+		case msg.String() == "end" || msg.String() == "G":
+			m.Tree.GotoBottom()
 		case key.Matches(msg, m.Keys.Toggle):
 			m.Tree.ToggleCurrent()
 		case key.Matches(msg, m.Keys.ExpandAll):

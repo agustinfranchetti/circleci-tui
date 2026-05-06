@@ -19,6 +19,9 @@ func TestViewRendersAllProjects(t *testing.T) {
 
 func TestViewShowsFailedPipelineDetails(t *testing.T) {
 	m := New(model.Fixtures())
+	// Pipelines start collapsed; expand them so the job hints (e.g. "3 specs
+	// failed") become reachable.
+	m.Tree.ExpandAll()
 	out := m.View()
 	if !strings.Contains(out, "CWEB-291") {
 		t.Errorf("View() should surface CWEB-291 ticket on the failed pipeline:\n%s", out)
@@ -45,6 +48,9 @@ func TestViewWithLogPanelOpen(t *testing.T) {
 	m := New(model.Fixtures())
 	m.Width = 160
 	m.Height = 30
+	// Pipelines start collapsed — expand the failed pipeline so we can land
+	// the cursor on its failing test job.
+	m.Tree.ExpandAll()
 	// Walk to the failed test job (project 0 → pipeline 0 → job 1).
 	for i := 0; i < 3; i++ {
 		m.Tree.Down()
@@ -52,14 +58,15 @@ func TestViewWithLogPanelOpen(t *testing.T) {
 	if cmd := m.toggleLogsForCurrent(); cmd == nil {
 		t.Fatal("expected log fetch command for selected job")
 	}
-	// Synthesize a logsLoadedMsg as if the fetch returned.
 	m.logs.setContent(m.logs.jobKey, "test failure log\nline2\n", nil)
 	out := m.View()
 	if !strings.Contains(out, "test failure log") {
 		t.Errorf("rendered view should contain log body; got:\n%s", out)
 	}
-	if !strings.Contains(out, "form-translation") {
-		t.Errorf("tree should still render alongside panel; got:\n%s", out)
+	// With the panel open we now hide the tree to give logs the full width;
+	// project names should NOT appear in the rendered view.
+	if strings.Contains(out, "form-translation") {
+		t.Errorf("tree should be hidden while log panel is open; got:\n%s", out)
 	}
 }
 

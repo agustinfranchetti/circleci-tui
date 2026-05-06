@@ -135,8 +135,12 @@ func buildActionMenu(t *model.Tree) (actionsMenu, bool) {
 	}, true
 }
 
+// buildBrowserURL constructs the CircleCI app URL for a pipeline / workflow /
+// job. Slugs from the API use abbreviated VCS prefixes (`gh/`, `bb/`) while
+// the app's URLs expect the full names (`github/`, `bitbucket/`). Passing the
+// raw slug through gives a 404, which is what the user was seeing.
 func buildBrowserURL(slug string, pipelineNumber int, workflowID, jobID string) string {
-	base := "https://app.circleci.com/pipelines/" + slug
+	base := "https://app.circleci.com/pipelines/" + expandVCSPrefix(slug)
 	if pipelineNumber > 0 {
 		base = fmt.Sprintf("%s/%d", base, pipelineNumber)
 	}
@@ -147,6 +151,20 @@ func buildBrowserURL(slug string, pipelineNumber int, workflowID, jobID string) 
 		base += "/jobs/" + jobID
 	}
 	return base
+}
+
+func expandVCSPrefix(slug string) string {
+	parts := strings.SplitN(slug, "/", 2)
+	if len(parts) != 2 {
+		return slug
+	}
+	switch parts[0] {
+	case "gh":
+		return "github/" + parts[1]
+	case "bb":
+		return "bitbucket/" + parts[1]
+	}
+	return slug
 }
 
 func (a *actionsMenu) up() {

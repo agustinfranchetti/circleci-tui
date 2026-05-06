@@ -2,28 +2,18 @@ package model
 
 import "testing"
 
-func TestNewTreeIsFullyExpanded(t *testing.T) {
+func TestNewTreeStartsWithPipelinesCollapsed(t *testing.T) {
 	tr := NewTree(Fixtures())
-	rows := tr.Visible()
-	totalJobs := 0
-	for _, p := range Fixtures() {
-		for _, pl := range p.Pipelines {
-			totalJobs += len(pl.Jobs)
-		}
-	}
-	jobRows := 0
-	for _, r := range rows {
+	for _, r := range tr.Visible() {
 		if r.Kind == RowJob {
-			jobRows++
+			t.Errorf("expected no job rows in default view (pipelines collapsed); got %+v", r)
 		}
-	}
-	if jobRows != totalJobs {
-		t.Errorf("expected all %d jobs visible by default; got %d job rows", totalJobs, jobRows)
 	}
 }
 
 func TestExpandAllAndCollapseAll(t *testing.T) {
 	tr := NewTree(Fixtures())
+	tr.ExpandAll()
 	allOpen := len(tr.Visible())
 	tr.CollapseAll()
 	collapsed := len(tr.Visible())
