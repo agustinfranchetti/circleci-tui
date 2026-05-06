@@ -149,6 +149,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg), nil
+
 	case tea.KeyMsg:
 		if m.actions.open {
 			return m.updateActions(msg)
@@ -399,10 +402,46 @@ func (m Model) panelDimensions() (int, int) {
 	return pw, ph
 }
 
+// handleMouse routes mouse events. Left-click on a tree row moves the cursor
+// to that row; wheel up/down scrolls one row at a time. Clicks outside the
+// tree area, or while a modal (picker/actions/filter) is open, are ignored —
+// modals own the input focus.
+func (m Model) handleMouse(msg tea.MouseMsg) Model {
+	if m.actions.open || m.picker.open || m.filterEditing {
+		return m
+	}
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.Tree.Up()
+		return m
+	case tea.MouseButtonWheelDown:
+		m.Tree.Down()
+		return m
+	}
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m
+	}
+	// Tree starts at y=1 (after the title); +1 more when the filter input is
+	// drawn — but filter editing is handled by the early-return above so we
+	// don't worry about it here.
+	const treeY = 1
+	if msg.Y < treeY {
+		return m
+	}
+	rows := m.Tree.Visible()
+	start, end := m.treeWindow(len(rows), m.Tree.Cursor())
+	idx := start + (msg.Y - treeY)
+	if idx < start || idx >= end {
+		return m
+	}
+	(&m).setCursor(idx)
+	return m
+}
+
 // Run launches the TUI in fixture mode (used by `circleci-tui tui` when no
 // token / live data is available — keeps the demo path runnable).
 func Run(projects []model.Project) error {
-	p := tea.NewProgram(New(projects), tea.WithAltScreen())
+	p := tea.NewProgram(New(projects), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
@@ -410,7 +449,7 @@ func Run(projects []model.Project) error {
 // RunLive launches the TUI against a real Service. opts honours config-file
 // settings — refresh interval, default branch filter — when provided.
 func RunLive(svc *cci.Service, watch []cci.Project, opts LiveOptions) error {
-	p := tea.NewProgram(NewLive(svc, watch, opts), tea.WithAltScreen())
+	p := tea.NewProgram(NewLive(svc, watch, opts), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
