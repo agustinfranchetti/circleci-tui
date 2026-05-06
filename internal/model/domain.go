@@ -44,7 +44,26 @@ type Pipeline struct {
 	Status    Status
 	Actor     string
 	CreatedAt time.Time
+	StartedAt time.Time
+	StoppedAt time.Time
 	Jobs      []Job
+}
+
+// Duration returns the wall-clock span of the pipeline. For finished pipelines
+// it's StoppedAt-StartedAt; for running ones it's now-StartedAt. Zero if we
+// don't have any timing yet.
+func (p Pipeline) Duration() time.Duration {
+	if p.StartedAt.IsZero() {
+		return 0
+	}
+	end := p.StoppedAt
+	if end.IsZero() {
+		end = time.Now()
+	}
+	if end.Before(p.StartedAt) {
+		return 0
+	}
+	return end.Sub(p.StartedAt)
 }
 
 type Job struct {
@@ -54,6 +73,30 @@ type Job struct {
 	Hint         string
 	WorkflowID   string
 	WorkflowName string
+	StartedAt    time.Time
+	StoppedAt    time.Time
+	// Dependencies is the list of job IDs that must complete before this one
+	// runs (CircleCI's `requires:` from the workflow YAML). Used to render the
+	// DAG as a tree.
+	Dependencies []string
+	// Depth is the topological depth of this job within its workflow — the
+	// length of the longest dependency chain from any root job. Set by
+	// computeJobDepths. Roots have Depth=0.
+	Depth int
+}
+
+func (j Job) Duration() time.Duration {
+	if j.StartedAt.IsZero() {
+		return 0
+	}
+	end := j.StoppedAt
+	if end.IsZero() {
+		end = time.Now()
+	}
+	if end.Before(j.StartedAt) {
+		return 0
+	}
+	return end.Sub(j.StartedAt)
 }
 
 func (p Project) WorstStatus() Status {

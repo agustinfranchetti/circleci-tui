@@ -36,11 +36,14 @@ type workflowList struct {
 }
 
 type apiJob struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	JobNumber  int    `json:"job_number"`
-	Type       string `json:"type"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Status       string    `json:"status"`
+	JobNumber    int       `json:"job_number"`
+	Type         string    `json:"type"`
+	StartedAt    time.Time `json:"started_at"`
+	StoppedAt    time.Time `json:"stopped_at"`
+	Dependencies []string  `json:"dependencies"`
 }
 
 type jobList struct {

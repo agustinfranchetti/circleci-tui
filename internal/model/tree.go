@@ -195,7 +195,7 @@ func (t *Tree) Visible() []Row {
 			}
 			for ji, job := range pl.Jobs {
 				rows = append(rows, Row{
-					Kind: RowJob, Indent: 2, Key: jobKey(job),
+					Kind: RowJob, Indent: 2 + job.Depth, Key: jobKey(job),
 					ProjIdx: pi, PipeIdx: li, JobIdx: ji,
 				})
 			}

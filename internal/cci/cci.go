@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/agustinfranchetti/circleci-tui/internal/config"
 	"github.com/agustinfranchetti/circleci-tui/internal/model"
@@ -103,6 +105,7 @@ func (s *Service) LoadProject(ctx context.Context, slug, name string, limit int)
 			fmt.Fprintf(os.Stderr, "warn: load jobs for pipeline %s: %v\n", ap.ID, err)
 		} else {
 			pl.Jobs = jobs
+			pl.StartedAt, pl.StoppedAt = pipelineSpan(jobs)
 			if pl.Status == model.StatusNotRun {
 				pl.Status = jobStatus
 			}
@@ -110,6 +113,29 @@ func (s *Service) LoadProject(ctx context.Context, slug, name string, limit int)
 		mp.Pipelines = append(mp.Pipelines, pl)
 	}
 	return mp, nil
+}
+
+// pipelineSpan returns the earliest StartedAt and latest StoppedAt across all
+// jobs. If any job is still running (zero StoppedAt), the pipeline's
+// StoppedAt is left zero so model.Pipeline.Duration() falls back to "now".
+func pipelineSpan(jobs []model.Job) (time.Time, time.Time) {
+	var start, stop time.Time
+	hasRunning := false
+	for _, j := range jobs {
+		if !j.StartedAt.IsZero() && (start.IsZero() || j.StartedAt.Before(start)) {
+			start = j.StartedAt
+		}
+		if j.StoppedAt.IsZero() && !j.StartedAt.IsZero() {
+			hasRunning = true
+		}
+		if !j.StoppedAt.IsZero() && j.StoppedAt.After(stop) {
+			stop = j.StoppedAt
+		}
+	}
+	if hasRunning {
+		stop = time.Time{}
+	}
+	return start, stop
 }
 
 func (s *Service) loadPipelineJobs(ctx context.Context, pipelineID string) ([]model.Job, model.Status, error) {
@@ -124,19 +150,88 @@ func (s *Service) loadPipelineJobs(ctx context.Context, pipelineID string) ([]mo
 		if err != nil {
 			return nil, model.StatusNotRun, err
 		}
+		wfJobs := make([]model.Job, 0, len(js))
 		for _, j := range js {
 			st := statusFromJobState(j.Status)
-			jobs = append(jobs, model.Job{
+			wfJobs = append(wfJobs, model.Job{
 				ID:           j.ID,
 				Name:         j.Name,
 				Status:       st,
 				WorkflowID:   wf.ID,
 				WorkflowName: wf.Name,
+				StartedAt:    j.StartedAt,
+				StoppedAt:    j.StoppedAt,
+				Dependencies: j.Dependencies,
 			})
 			worst = combineStatus(worst, st)
 		}
+		jobs = append(jobs, sortByDAGDepth(computeJobDepths(wfJobs))...)
 	}
 	return jobs, worst, nil
+}
+
+// computeJobDepths sets Job.Depth to the topological depth of each job in the
+// dependency DAG. A job with no deps (or only deps outside this workflow) has
+// Depth=0; a job depending on jobs of max depth N has Depth N+1. Cycles are
+// broken silently — any job in a cycle gets Depth=0.
+func computeJobDepths(jobs []model.Job) []model.Job {
+	idx := make(map[string]int, len(jobs))
+	for i, j := range jobs {
+		idx[j.ID] = i
+	}
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	state := make([]byte, len(jobs))
+	depth := make([]int, len(jobs))
+	var visit func(i int) int
+	visit = func(i int) int {
+		if state[i] == black {
+			return depth[i]
+		}
+		if state[i] == gray {
+			return 0
+		}
+		state[i] = gray
+		d := 0
+		for _, dep := range jobs[i].Dependencies {
+			j, ok := idx[dep]
+			if !ok {
+				continue
+			}
+			if c := visit(j) + 1; c > d {
+				d = c
+			}
+		}
+		depth[i] = d
+		state[i] = black
+		return d
+	}
+	for i := range jobs {
+		visit(i)
+	}
+	for i := range jobs {
+		jobs[i].Depth = depth[i]
+	}
+	return jobs
+}
+
+// sortByDAGDepth orders jobs by depth, then by start time, then by name. So
+// the rendered tree reads naturally top-to-bottom in dependency order, with
+// stable ties.
+func sortByDAGDepth(jobs []model.Job) []model.Job {
+	sort.SliceStable(jobs, func(a, b int) bool {
+		if jobs[a].Depth != jobs[b].Depth {
+			return jobs[a].Depth < jobs[b].Depth
+		}
+		if !jobs[a].StartedAt.Equal(jobs[b].StartedAt) {
+			return jobs[a].StartedAt.Before(jobs[b].StartedAt)
+		}
+		return jobs[a].Name < jobs[b].Name
+	})
+	return jobs
 }
 
 func (s *Service) RerunWorkflow(ctx context.Context, workflowID string, fromFailed bool) error {

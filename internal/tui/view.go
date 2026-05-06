@@ -108,9 +108,10 @@ func (m Model) renderEmptyLiveState() string {
 func (m Model) renderTree() string {
 	rows := m.Tree.Visible()
 	cursor := m.Tree.Cursor()
+	start, end := m.treeWindow(len(rows), cursor)
 	var b strings.Builder
-	for i, row := range rows {
-		line := m.renderRow(row)
+	for i := start; i < end; i++ {
+		line := m.renderRow(rows[i])
 		if i == cursor {
 			line = m.Theme.Selected.Render(line)
 		}
@@ -118,6 +119,52 @@ func (m Model) renderTree() string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// treeWindow picks a [start,end) slice of the visible rows that fits in the
+// space available for the tree, biased to keep the cursor visible. Without
+// this, View() emits more rows than the terminal can show and the user is
+// stuck looking at the bottom of the list with the cursor scrolled off-screen.
+//
+// When m.Height is 0 (tests, or before the first WindowSizeMsg) we render
+// everything — viewport math only kicks in once we know the terminal size.
+func (m Model) treeWindow(total, cursor int) (int, int) {
+	if m.Height <= 0 {
+		return 0, total
+	}
+	avail := m.treeHeight()
+	if total <= avail {
+		return 0, total
+	}
+	half := avail / 2
+	start := cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + avail
+	if end > total {
+		end = total
+		start = end - avail
+		if start < 0 {
+			start = 0
+		}
+	}
+	return start, end
+}
+
+// treeHeight returns how many rows we can devote to the tree given the current
+// terminal size, after subtracting fixed chrome (title, status bar, filter
+// input when active).
+func (m Model) treeHeight() int {
+	chrome := 3 // title line + blank separator + status bar
+	if m.filterEditing {
+		chrome++
+	}
+	avail := m.Height - chrome
+	if avail < 5 {
+		avail = 5
+	}
+	return avail
 }
 
 func (m Model) renderRow(r model.Row) string {
@@ -177,14 +224,30 @@ func (m Model) renderPipeline(r model.Row) string {
 	glyph := statusStyle.Render(pl.Status.Glyph())
 	number := m.Theme.Muted.Render(fmt.Sprintf("#%d", pl.Number))
 	branch := m.Theme.Branch.Render(pl.Branch)
-	when := m.Theme.Muted.Render(humanizeAgo(pl.CreatedAt))
 
 	parts := []string{chevron, glyph, number, branch}
 	if pl.Ticket != "" && pl.Ticket != pl.Branch {
 		parts = append(parts, m.Theme.Muted.Render("·"), m.Theme.Ticket.Render(pl.Ticket))
 	}
-	parts = append(parts, m.Theme.Muted.Render("·"), when)
+	if pl.Actor != "" {
+		parts = append(parts, m.Theme.Muted.Render("·"), m.Theme.Muted.Render("by "+pl.Actor))
+	}
+	parts = append(parts, m.Theme.Muted.Render("·"), m.Theme.Muted.Render(pipelineTime(pl)))
 	return strings.Join(parts, " ")
+}
+
+// pipelineTime renders "running for 2m · started 5m ago", "took 4m 30s · 2h
+// ago", or just "5m ago" when we have no duration data yet.
+func pipelineTime(pl model.Pipeline) string {
+	ago := humanizeAgo(pl.CreatedAt)
+	dur := pl.Duration()
+	if dur <= 0 {
+		return ago
+	}
+	if pl.Status == model.StatusRunning {
+		return "running for " + humanizeDuration(dur) + " · " + ago
+	}
+	return "took " + humanizeDuration(dur) + " · " + ago
 }
 
 func (m Model) renderJob(r model.Row) string {
@@ -194,12 +257,51 @@ func (m Model) renderJob(r model.Row) string {
 	}
 	statusStyle := m.Theme.StatusStyle(job.Status)
 	glyph := statusStyle.Render(job.Status.Glyph())
-	name := lipgloss.NewStyle().Width(10).Render(job.Name)
-	hint := ""
-	if job.Hint != "" {
-		hint = " " + m.Theme.Muted.Render(job.Hint)
+	parts := []string{glyph, job.Name}
+	if d := jobTime(job); d != "" {
+		parts = append(parts, m.Theme.Muted.Render("·"), m.Theme.Muted.Render(d))
 	}
-	return fmt.Sprintf("%s %s%s", glyph, name, hint)
+	if job.Hint != "" {
+		parts = append(parts, m.Theme.Muted.Render(job.Hint))
+	}
+	return strings.Join(parts, " ")
+}
+
+// jobTime returns "2m 14s", "running 1m 30s", or empty if no timing yet.
+func jobTime(job model.Job) string {
+	dur := job.Duration()
+	if dur <= 0 {
+		return ""
+	}
+	if job.Status == model.StatusRunning {
+		return "running " + humanizeDuration(dur)
+	}
+	return humanizeDuration(dur)
+}
+
+// humanizeDuration formats a duration as "1h 23m", "4m 12s", or "37s" — short
+// enough for status lines, lossy enough that we don't worry about ms.
+func humanizeDuration(d time.Duration) string {
+	if d < time.Second {
+		return "0s"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		m := int(d.Minutes())
+		s := int(d.Seconds()) - m*60
+		if s == 0 {
+			return fmt.Sprintf("%dm", m)
+		}
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	h := int(d.Hours())
+	mm := int(d.Minutes()) - h*60
+	if mm == 0 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dh %dm", h, mm)
 }
 
 func (m Model) renderStatusBar() string {
