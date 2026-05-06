@@ -1,8 +1,7 @@
-circleci-tui
-circleci-tui.exe
+/circleci-tui
+/circleci-tui.exe
 /dist/
-/bin/circleci-tui
-/bin/circleci-tui.exe
 node_modules/
+package-lock.json
 *.log
 .DS_Store

@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+// Placeholder shipped in the npm tarball so npm creates the bin shim at
+// install time. The postinstall script (bin/install.js) replaces this file
+// with the platform-specific Go binary downloaded from GitHub Releases.
+// If you're seeing this error, postinstall didn't complete.
+"use strict";
+console.error(
+  "circleci-tui: install incomplete — the postinstall step did not run or failed.\n" +
+    "  Try:  npm i -g circleci-tui --force\n" +
+    "  Or build from source: https://github.com/agustinfranchetti/circleci-tui"
+);
+process.exit(1);
