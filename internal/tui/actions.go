@@ -87,22 +87,30 @@ func buildActionMenu(t *model.Tree) (actionsMenu, bool) {
 	var approvalJobID string
 	var summary string
 
-	if r.JobIdx >= 0 && r.JobIdx < len(pipe.Jobs) {
-		job := pipe.Jobs[r.JobIdx]
+	switch {
+	case r.Kind == model.RowJob && r.WfIdx >= 0 && r.JobIdx >= 0:
+		wf := pipe.Workflows[r.WfIdx]
+		job := wf.Jobs[r.JobIdx]
 		target.job = job
 		target.hasJob = true
-		workflowID = job.WorkflowID
+		workflowID = wf.ID
 		summary = fmt.Sprintf("%s · #%d · %s", proj.Name, pipe.Number, job.Name)
 		if job.Status == model.StatusOnHold {
 			approvalJobID = job.ID
 		}
-	} else {
-		// Pipeline row — find a workflow ID by looking at any of its jobs.
-		for _, j := range pipe.Jobs {
-			if j.WorkflowID != "" {
-				workflowID = j.WorkflowID
-				break
-			}
+	case r.Kind == model.RowWorkflow && r.WfIdx >= 0:
+		wf := pipe.Workflows[r.WfIdx]
+		workflowID = wf.ID
+		label := wf.Name
+		if wf.IsRerun {
+			label += " (rerun)"
+		}
+		summary = fmt.Sprintf("%s · #%d · %s", proj.Name, pipe.Number, label)
+	default:
+		// Pipeline row — pick the most recent workflow as the action target;
+		// that's almost always the one the user wants to rerun/cancel.
+		if len(pipe.Workflows) > 0 {
+			workflowID = pipe.Workflows[len(pipe.Workflows)-1].ID
 		}
 		summary = fmt.Sprintf("%s · #%d · %s", proj.Name, pipe.Number, pipe.Branch)
 	}

@@ -10,6 +10,7 @@ type RowKind int
 const (
 	RowProject RowKind = iota
 	RowPipeline
+	RowWorkflow
 	RowJob
 )
 
@@ -19,6 +20,7 @@ type Row struct {
 	Key     string
 	ProjIdx int
 	PipeIdx int
+	WfIdx   int
 	JobIdx  int
 }
 
@@ -32,15 +34,18 @@ type Tree struct {
 	// textFilter is a case-insensitive substring matched against branch,
 	// ticket, status, project name, and pipeline number. Empty = match all.
 	textFilter string
+	// statusFilter restricts pipelines to a single Status when non-empty.
+	statusFilter Status
 	// mineOnly + mineActor restrict to pipelines whose actor login matches.
 	mineOnly  bool
 	mineActor string
 }
 
 // NewTree builds a tree where every pipeline is collapsed by default but
-// project headers stay open. The user lands on a compact list — one row per
-// pipeline per project — instead of a screen-blowing list of every job in
-// every recent run. Press ⏎/space on a pipeline to expand its job DAG.
+// project headers stay open. Workflows under an expanded pipeline start
+// expanded — the user wants to see all jobs of a workflow they explicitly
+// drilled into. Press ⏎/space on a pipeline to expand its workflows; ⏎/space
+// on a workflow toggles its job list.
 //
 // AdoptCollapsedFrom carries the user's expand/collapse choices forward across
 // refreshes, so this default only governs the initial state.
@@ -71,20 +76,36 @@ func (t *Tree) AdoptCollapsedFrom(prev *Tree) {
 	}
 }
 
+// AdoptFiltersFrom carries the user's filter selections (text search, status
+// pick, mine-only) across a refresh. Without this, every 30s tick wipes the
+// filters and dumps the user back to the unfiltered view.
+func (t *Tree) AdoptFiltersFrom(prev *Tree) {
+	if prev == nil {
+		return
+	}
+	t.textFilter = prev.textFilter
+	t.statusFilter = prev.statusFilter
+	t.mineOnly = prev.mineOnly
+	t.mineActor = prev.mineActor
+}
+
 // ExpandAll clears the collapsed state for every row — the default is now
 // "everything expanded", so this just resets back to the open view.
 func (t *Tree) ExpandAll() {
 	t.collapsed = make(map[string]bool)
 }
 
-// CollapseAll folds every project and pipeline. Jobs aren't collapsible.
+// CollapseAll folds every project, pipeline, and workflow. Jobs aren't
+// collapsible.
 func (t *Tree) CollapseAll() {
-	for pi, proj := range t.Projects {
+	for _, proj := range t.Projects {
 		t.collapsed[projectKey(proj)] = true
 		for _, pl := range proj.Pipelines {
 			t.collapsed[pipelineKey(pl)] = true
+			for _, wf := range pl.Workflows {
+				t.collapsed[workflowKey(wf)] = true
+			}
 		}
-		_ = pi
 	}
 }
 
@@ -123,7 +144,20 @@ func (t *Tree) SetMineOnly(on bool, actor string) {
 // HasFilters reports whether any pipeline-narrowing filter is active. Used by
 // the view to decide whether to show "no matches" empty-state copy.
 func (t *Tree) HasFilters() bool {
-	return t.textFilter != "" || t.mineOnly
+	return t.textFilter != "" || t.mineOnly || t.statusFilter != ""
+}
+
+// StatusFilter returns the active status filter, or empty when "any".
+func (t *Tree) StatusFilter() Status { return t.statusFilter }
+
+// SetStatusFilter narrows visible pipelines to ones matching s. Pass "" to
+// clear the filter. Resets the cursor to keep it valid.
+func (t *Tree) SetStatusFilter(s Status) {
+	if t.statusFilter == s {
+		return
+	}
+	t.statusFilter = s
+	t.cursor = 0
 }
 
 // pipelineMatches returns true when the pipeline survives the current
@@ -131,6 +165,9 @@ func (t *Tree) HasFilters() bool {
 // with zero surviving pipelines is also hidden.
 func (t *Tree) pipelineMatches(p Pipeline, projectName string) bool {
 	if t.mineOnly && !equalActor(p.Actor, t.mineActor) {
+		return false
+	}
+	if t.statusFilter != "" && p.Status != t.statusFilter {
 		return false
 	}
 	if t.textFilter == "" {
@@ -166,9 +203,10 @@ func (t *Tree) SetFocus(slug string) {
 
 func (t *Tree) IsCollapsed(key string) bool { return t.collapsed[key] }
 
-func projectKey(p Project) string  { return "P:" + p.Slug }
-func pipelineKey(p Pipeline) string { return "L:" + p.ID }
-func jobKey(j Job) string           { return "J:" + j.ID }
+func projectKey(p Project) string   { return "P:" + p.Slug }
+func pipelineKey(p Pipeline) string  { return "L:" + p.ID }
+func workflowKey(w Workflow) string  { return "W:" + w.ID }
+func jobKey(j Job) string            { return "J:" + j.ID }
 
 func (t *Tree) Cursor() int { return t.cursor }
 
@@ -191,7 +229,7 @@ func (t *Tree) Visible() []Row {
 		}
 		pKey := projectKey(proj)
 		rows = append(rows, Row{
-			Kind: RowProject, Indent: 0, Key: pKey, ProjIdx: pi, PipeIdx: -1, JobIdx: -1,
+			Kind: RowProject, Indent: 0, Key: pKey, ProjIdx: pi, PipeIdx: -1, WfIdx: -1, JobIdx: -1,
 		})
 		if t.collapsed[pKey] {
 			continue
@@ -201,16 +239,39 @@ func (t *Tree) Visible() []Row {
 			lKey := pipelineKey(pl)
 			rows = append(rows, Row{
 				Kind: RowPipeline, Indent: 1, Key: lKey,
-				ProjIdx: pi, PipeIdx: li, JobIdx: -1,
+				ProjIdx: pi, PipeIdx: li, WfIdx: -1, JobIdx: -1,
 			})
 			if t.collapsed[lKey] {
 				continue
 			}
-			for ji, job := range pl.Jobs {
-				rows = append(rows, Row{
-					Kind: RowJob, Indent: 2 + job.Depth, Key: jobKey(job),
-					ProjIdx: pi, PipeIdx: li, JobIdx: ji,
-				})
+			// Skip an extra workflow row when there's exactly one workflow —
+			// the visual indirection adds noise without telling the user
+			// anything new (it's just a heading on top of jobs).
+			singleWorkflow := len(pl.Workflows) == 1
+			for wi, wf := range pl.Workflows {
+				if !singleWorkflow {
+					wKey := workflowKey(wf)
+					rows = append(rows, Row{
+						Kind: RowWorkflow, Indent: 2, Key: wKey,
+						ProjIdx: pi, PipeIdx: li, WfIdx: wi, JobIdx: -1,
+					})
+					if t.collapsed[wKey] {
+						continue
+					}
+				}
+				// Job indent stays at the workflow level — the per-job DAG
+				// depth is encoded in Job.TreePrefix (├─ / │  / └─), so we
+				// don't add `job.Depth` here.
+				jobIndent := 2
+				if !singleWorkflow {
+					jobIndent = 3
+				}
+				for ji, job := range wf.Jobs {
+					rows = append(rows, Row{
+						Kind: RowJob, Indent: jobIndent, Key: jobKey(job),
+						ProjIdx: pi, PipeIdx: li, WfIdx: wi, JobIdx: ji,
+					})
+				}
 			}
 		}
 	}
@@ -293,9 +354,16 @@ func (t *Tree) PipelineAt(r Row) (Pipeline, bool) {
 	return t.Projects[r.ProjIdx].Pipelines[r.PipeIdx], true
 }
 
+func (t *Tree) WorkflowAt(r Row) (Workflow, bool) {
+	if r.WfIdx < 0 {
+		return Workflow{}, false
+	}
+	return t.Projects[r.ProjIdx].Pipelines[r.PipeIdx].Workflows[r.WfIdx], true
+}
+
 func (t *Tree) JobAt(r Row) (Job, bool) {
-	if r.JobIdx < 0 {
+	if r.JobIdx < 0 || r.WfIdx < 0 {
 		return Job{}, false
 	}
-	return t.Projects[r.ProjIdx].Pipelines[r.PipeIdx].Jobs[r.JobIdx], true
+	return t.Projects[r.ProjIdx].Pipelines[r.PipeIdx].Workflows[r.WfIdx].Jobs[r.JobIdx], true
 }

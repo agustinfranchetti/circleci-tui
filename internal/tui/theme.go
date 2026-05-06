@@ -23,6 +23,13 @@ type Theme struct {
 	StatusKey  lipgloss.Style
 	StatusInfo lipgloss.Style
 	Title      lipgloss.Style
+
+	// Divider is a thin muted glyph used as a separator (status bar,
+	// section dividers in the panel header, between steps).
+	Divider lipgloss.Style
+	// HRule is a horizontal rule character; the renderer repeats it across
+	// the available width to draw a section break.
+	HRule lipgloss.Style
 }
 
 func DefaultTheme() Theme {
@@ -53,6 +60,8 @@ func DefaultTheme() Theme {
 		StatusKey:  lipgloss.NewStyle().Foreground(col("#a78bfa", "#7c3aed")).Bold(true),
 		StatusInfo: muted,
 		Title:      lipgloss.NewStyle().Bold(true).Foreground(col("#a78bfa", "#7c3aed")),
+		Divider:    lipgloss.NewStyle().Foreground(col("#374151", "#d1d5db")),
+		HRule:      lipgloss.NewStyle().Foreground(col("#374151", "#d1d5db")),
 	}
 }
 

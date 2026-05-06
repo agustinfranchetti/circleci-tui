@@ -44,29 +44,32 @@ func TestViewWithActiveFilters(t *testing.T) {
 	}
 }
 
-func TestViewWithLogPanelOpen(t *testing.T) {
+func TestViewWithJobDetailOpen(t *testing.T) {
 	m := New(model.Fixtures())
 	m.Width = 160
 	m.Height = 30
-	// Pipelines start collapsed — expand the failed pipeline so we can land
-	// the cursor on its failing test job.
+	// Pipelines start collapsed — expand to land the cursor on a job row.
 	m.Tree.ExpandAll()
-	// Walk to the failed test job (project 0 → pipeline 0 → job 1).
+	// Walk to a job row inside the first pipeline.
 	for i := 0; i < 3; i++ {
 		m.Tree.Down()
 	}
-	if cmd := m.toggleLogsForCurrent(); cmd == nil {
-		t.Fatal("expected log fetch command for selected job")
+	if cmd := m.toggleDetailForCurrent(); cmd == nil {
+		t.Fatal("expected step-detail fetch command for selected job")
 	}
-	m.logs.setContent(m.logs.jobKey, "test failure log\nline2\n", nil)
+	// Synthesize a detail-loaded message as if v1.1 returned three steps.
+	m.detail.setDetail(m.detail.jobKey, model.JobDetail{
+		Steps: []model.Step{
+			{Name: "Spin up environment", Status: model.StatusSuccess, Actions: []model.StepAction{{Index: 0, StepID: 100, Status: model.StatusSuccess}}},
+			{Name: "yarn test", Status: model.StatusFailed, Actions: []model.StepAction{{Index: 0, StepID: 101, Status: model.StatusFailed}}},
+		},
+	}, nil)
 	out := m.View()
-	if !strings.Contains(out, "test failure log") {
-		t.Errorf("rendered view should contain log body; got:\n%s", out)
+	if !strings.Contains(out, "yarn test") {
+		t.Errorf("rendered view should contain step name; got:\n%s", out)
 	}
-	// With the panel open we now hide the tree to give logs the full width;
-	// project names should NOT appear in the rendered view.
 	if strings.Contains(out, "form-translation") {
-		t.Errorf("tree should be hidden while log panel is open; got:\n%s", out)
+		t.Errorf("tree should be hidden while step-detail panel is open; got:\n%s", out)
 	}
 }
 

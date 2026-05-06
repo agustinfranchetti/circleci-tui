@@ -2,8 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/agustinfranchetti/circleci-tui/internal/model"
 )
@@ -16,11 +19,9 @@ func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString(m.renderTitle())
 	b.WriteString("\n")
-	if m.filterEditing {
-		b.WriteString(m.filterInput.View())
-		b.WriteString("\n")
-	}
 	switch {
+	case m.filter.open:
+		b.WriteString(m.filter.render(m.Theme, m.Width, m.Height))
 	case m.actions.open:
 		b.WriteString(m.renderActionsMenu())
 	case m.picker.open:
@@ -35,13 +36,12 @@ func (m Model) View() string {
 	return b.String()
 }
 
-// renderMainBody shows either the tree or the log panel — never both. The
-// previous side-by-side split caused tree lines to word-wrap mid-job-name once
-// the panel ate half the width; a full-screen panel keeps log reading roomy
-// and the tree wrap-free. Press `e` to toggle.
+// renderMainBody shows either the tree or the step-detail panel — never both.
+// `e` toggles. Full-screen panel avoids the wrap problems that the
+// side-by-side split had.
 func (m Model) renderMainBody() string {
-	if m.logs.open {
-		return m.logs.render(m.Theme)
+	if m.detail.open {
+		return m.detail.render(m.Theme, m.statusGlyph)
 	}
 	tree := m.renderTree()
 	if tree == "" && m.Tree.HasFilters() {
@@ -62,6 +62,9 @@ func (m Model) renderTitle() string {
 			actor = "?"
 		}
 		badges = append(badges, m.Theme.Ticket.Render("mine="+actor))
+	}
+	if s := m.Tree.StatusFilter(); s != "" {
+		badges = append(badges, m.Theme.StatusStyle(s).Render("status:"+string(s)))
 	}
 	if f := m.Tree.TextFilter(); f != "" {
 		badges = append(badges, m.Theme.Ticket.Render("filter:"+f))
@@ -87,9 +90,119 @@ func (m Model) renderEmptyLiveState() string {
 		return m.Theme.Failed.Render("✗ ") + m.Theme.Muted.Render(m.loadErr.Error())
 	}
 	if m.loading {
-		return m.Theme.Running.Render("⟳ ") + m.Theme.Muted.Render("loading pipelines…")
+		return m.renderLoadingAnim()
 	}
 	return m.Theme.Muted.Render("no projects to watch — run `circleci-tui config`")
+}
+
+// renderLoadingAnim draws a centred ocean animation: one wavy surface line
+// rippling left-to-right, with a fixed top-to-bottom cyan-to-teal gradient
+// behind it. The compound-sine surface mixes two waves at different speeds
+// so the ripple pattern doesn't repeat obviously, while every row below the
+// surface stays a solid colour — that combination ends up reading like
+// water far better than overlapping translucent layers did in the terminal.
+func (m Model) renderLoadingAnim() string {
+	if m.Width <= 0 {
+		return m.Theme.Running.Render("⟳ ") + m.Theme.Muted.Render("loading pipelines…")
+	}
+	width := 60
+	if avail := m.Width - 4; avail < width {
+		width = avail
+	}
+	if width < 20 {
+		width = 20
+	}
+	const animHeight = 9
+	// One colour per row, top → bottom. The wave's surface only rides
+	// rows ~2–4; everything below is a solid block in the row's colour.
+	rowColors := []lipgloss.AdaptiveColor{
+		{Dark: "#67e8f9", Light: "#22d3ee"},
+		{Dark: "#22d3ee", Light: "#06b6d4"},
+		{Dark: "#06b6d4", Light: "#0891b2"},
+		{Dark: "#0891b2", Light: "#0e7490"},
+		{Dark: "#0e7490", Light: "#155e75"},
+		{Dark: "#155e75", Light: "#164e63"},
+		{Dark: "#164e63", Light: "#0c4a6e"},
+		{Dark: "#0c4a6e", Light: "#0c4a6e"},
+		{Dark: "#082f49", Light: "#082f49"},
+	}
+
+	bars := []rune("▁▂▃▄▅▆▇█")
+	frame := float64(m.loadFrame)
+
+	leftPad := (m.Width - width) / 2
+	if leftPad < 0 {
+		leftPad = 0
+	}
+
+	// Surface position: compound sine for a non-repeating ripple.
+	surface := func(x int) float64 {
+		fx := float64(x)
+		return 3.0 +
+			1.0*math.Sin((fx+frame*0.55)*0.16) +
+			0.5*math.Sin((fx+frame*0.27)*0.31)
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\n")
+	for y := 0; y < animHeight; y++ {
+		b.WriteString(strings.Repeat(" ", leftPad))
+		col := rowColors[y]
+		for x := 0; x < width; x++ {
+			yWave := surface(x)
+			cellTop := float64(y)
+			cellBottom := cellTop + 1
+			if cellBottom <= yWave {
+				b.WriteString(" ") // sky
+				continue
+			}
+			if cellTop >= yWave {
+				b.WriteString(lipgloss.NewStyle().Foreground(col).Render("█"))
+				continue
+			}
+			filled := cellBottom - yWave
+			idx := int(math.Round(filled * 8))
+			if idx < 1 {
+				idx = 1
+			} else if idx > 8 {
+				idx = 8
+			}
+			b.WriteString(lipgloss.NewStyle().Foreground(col).Render(string(bars[idx-1])))
+		}
+		b.WriteString("\n")
+	}
+
+	// Caption + rotating bright-dot indicator, centred.
+	b.WriteString("\n")
+	caption := m.Theme.Muted.Render("fetching pipelines from CircleCI")
+	dots := renderLoadingDots(m.loadFrame, m.Theme)
+	captionLine := caption + "  " + dots
+	capPad := (m.Width - lipgloss.Width(captionLine)) / 2
+	if capPad < 0 {
+		capPad = 0
+	}
+	b.WriteString(strings.Repeat(" ", capPad))
+	b.WriteString(captionLine)
+	return b.String()
+}
+
+// renderLoadingDots draws three pellets where one is brighter than the
+// others, with the highlight rotating left-to-right every few frames. Mirrors
+// the reference mockup's blinking-dots feel without timing-based opacity.
+func renderLoadingDots(frame int, theme Theme) string {
+	pos := (frame / 4) % 3
+	var b strings.Builder
+	for i := 0; i < 3; i++ {
+		if i == pos {
+			b.WriteString(theme.Running.Render("●"))
+		} else {
+			b.WriteString(theme.Muted.Render("○"))
+		}
+		if i < 2 {
+			b.WriteString(" ")
+		}
+	}
+	return b.String()
 }
 
 func (m Model) renderTree() string {
@@ -139,14 +252,11 @@ func (m Model) treeWindow(total, cursor int) (int, int) {
 	return start, end
 }
 
-// treeHeight returns how many rows we can devote to the tree given the current
-// terminal size, after subtracting fixed chrome (title, status bar, filter
-// input when active).
+// treeHeight returns how many rows we can devote to the tree given the
+// current terminal size, after subtracting fixed chrome (title + blank
+// separator + status bar).
 func (m Model) treeHeight() int {
-	chrome := 3 // title line + blank separator + status bar
-	if m.filterEditing {
-		chrome++
-	}
+	chrome := 3
 	avail := m.Height - chrome
 	if avail < 5 {
 		avail = 5
@@ -161,10 +271,76 @@ func (m Model) renderRow(r model.Row) string {
 		return indent + m.renderProject(r)
 	case model.RowPipeline:
 		return indent + m.renderPipeline(r)
+	case model.RowWorkflow:
+		return indent + m.renderWorkflow(r)
 	case model.RowJob:
 		return indent + m.renderJob(r)
 	}
 	return ""
+}
+
+// renderWorkflow draws a workflow header. Only shown when a pipeline has more
+// than one workflow (the rerun case) — otherwise the renderer skips this row
+// entirely to avoid noise.
+func (m Model) renderWorkflow(r model.Row) string {
+	wf, ok := m.Tree.WorkflowAt(r)
+	if !ok {
+		return ""
+	}
+	chevron := " "
+	if len(wf.Jobs) > 0 {
+		if m.Tree.IsCollapsed(r.Key) {
+			chevron = "▶"
+		} else {
+			chevron = "▼"
+		}
+	}
+	glyph := m.statusGlyph(wf.Status)
+	nameStyle := m.Theme.Header
+	switch wf.Status {
+	case model.StatusFailed, model.StatusRunning, model.StatusOnHold:
+		nameStyle = m.Theme.StatusStyle(wf.Status).Bold(true)
+	}
+	name := nameStyle.Render(wf.Name)
+	parts := []string{chevron, glyph, name}
+	if wf.IsRerun {
+		parts = append(parts, m.Theme.Ticket.Render("(rerun)"))
+	}
+	parts = append(parts, m.Theme.Muted.Render("·"), m.Theme.Muted.Render(workflowTime(wf)))
+	return strings.Join(parts, " ")
+}
+
+func workflowTime(wf model.Workflow) string {
+	dur := wf.Duration()
+	if dur <= 0 {
+		return humanizeAgo(wf.CreatedAt)
+	}
+	if wf.Status == model.StatusRunning {
+		return "running " + humanizeDuration(dur)
+	}
+	return "took " + humanizeDuration(dur)
+}
+
+// statusGlyph returns the visual marker for a status — animated when the
+// status is Running (the bubbles spinner ticks every frame), static for
+// finished statuses. All renderers go through this so a single global
+// spinner state animates every running row in lock-step.
+func (m Model) statusGlyph(s model.Status) string {
+	if s == model.StatusRunning {
+		return m.spinner.View()
+	}
+	return m.Theme.StatusStyle(s).Render(s.Glyph())
+}
+
+// emphasizeNumber renders a pipeline number with status-tinted bold when the
+// status is "interesting" (failed/running/on-hold) — makes those rows pop in
+// a long mixed list.
+func (m Model) emphasizeNumber(s model.Status, n int) string {
+	switch s {
+	case model.StatusFailed, model.StatusRunning, model.StatusOnHold:
+		return m.Theme.StatusStyle(s).Bold(true).Render(fmt.Sprintf("#%d", n))
+	}
+	return m.Theme.Muted.Render(fmt.Sprintf("#%d", n))
 }
 
 func (m Model) renderProject(r model.Row) string {
@@ -200,16 +376,15 @@ func (m Model) renderPipeline(r model.Row) string {
 		return ""
 	}
 	chevron := " "
-	if len(pl.Jobs) > 0 {
+	if len(pl.Workflows) > 0 {
 		if m.Tree.IsCollapsed(r.Key) {
 			chevron = "▶"
 		} else {
 			chevron = "▼"
 		}
 	}
-	statusStyle := m.Theme.StatusStyle(pl.Status)
-	glyph := statusStyle.Render(pl.Status.Glyph())
-	number := m.Theme.Muted.Render(fmt.Sprintf("#%d", pl.Number))
+	glyph := m.statusGlyph(pl.Status)
+	number := m.emphasizeNumber(pl.Status, pl.Number)
 	branch := m.Theme.Branch.Render(pl.Branch)
 
 	parts := []string{chevron, glyph, number, branch}
@@ -242,9 +417,16 @@ func (m Model) renderJob(r model.Row) string {
 	if !ok {
 		return ""
 	}
-	statusStyle := m.Theme.StatusStyle(job.Status)
-	glyph := statusStyle.Render(job.Status.Glyph())
-	parts := []string{glyph, job.Name}
+	glyph := m.statusGlyph(job.Status)
+	nameStyle := lipgloss.NewStyle()
+	switch job.Status {
+	case model.StatusFailed:
+		nameStyle = m.Theme.Failed
+	case model.StatusRunning:
+		nameStyle = m.Theme.Running
+	}
+	tree := m.Theme.Divider.Render(job.TreePrefix)
+	parts := []string{tree + glyph, nameStyle.Render(job.Name)}
 	if d := jobTime(job); d != "" {
 		parts = append(parts, m.Theme.Muted.Render("·"), m.Theme.Muted.Render(d))
 	}
@@ -292,18 +474,28 @@ func humanizeDuration(d time.Duration) string {
 }
 
 func (m Model) renderStatusBar() string {
-	if m.filterEditing {
+	// During the initial load the user has nothing to do but wait, so we
+	// strip the chrome down to just the quit hint instead of advertising
+	// keys that won't do anything yet.
+	if m.svc != nil && len(m.Tree.Projects) == 0 && m.loading {
+		return m.Theme.StatusBar.Render(
+			m.Theme.StatusKey.Render("q") + " " + m.Theme.StatusInfo.Render("quit"),
+		)
+	}
+	if m.filter.open {
 		keys := []struct{ k, label string }{
-			{"type", "filter"},
+			{"↑↓", "row"},
+			{"←→", "status"},
 			{"⏎", "apply"},
-			{"esc", "clear"},
+			{"esc", "cancel"},
 		}
 		var parts []string
 		for _, k := range keys {
 			parts = append(parts,
 				m.Theme.StatusKey.Render(k.k)+" "+m.Theme.StatusInfo.Render(k.label))
 		}
-		return m.Theme.StatusBar.Render(strings.Join(parts, "  "))
+		sep := m.Theme.Divider.Render(" │ ")
+		return m.Theme.StatusBar.Render(strings.Join(parts, sep))
 	}
 	if m.picker.open {
 		keys := []struct{ k, label string }{
@@ -330,18 +522,22 @@ func (m Model) renderStatusBar() string {
 		{"r", "refresh"},
 		{"q", "quit"},
 	}
-	if m.logs.open {
-		keys = append(keys[:len(keys)-1],
-			struct{ k, label string }{"PgUp/Dn", "scroll"},
-			struct{ k, label string }{"q", "quit"},
-		)
+	if m.detail.open {
+		keys = []struct{ k, label string }{
+			{"↑↓", "step"},
+			{"⏎", "expand"},
+			{"PgUp/Dn", "scroll"},
+			{"esc/e", "close"},
+			{"q", "quit"},
+		}
 	}
 	var parts []string
 	for _, k := range keys {
 		parts = append(parts,
 			m.Theme.StatusKey.Render(k.k)+" "+m.Theme.StatusInfo.Render(k.label))
 	}
-	left := m.Theme.StatusBar.Render(strings.Join(parts, "  "))
+	sep := m.Theme.Divider.Render(" │ ")
+	left := m.Theme.StatusBar.Render(strings.Join(parts, sep))
 	right := m.renderRefreshIndicator()
 	if toast := m.activeToast(); toast != "" {
 		// Toast trumps the refresh indicator while it's active — both are
