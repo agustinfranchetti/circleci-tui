@@ -6,9 +6,17 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// The CircleCI MCP server's list_followed_projects tool returns LLM-friendly
+// prose, not JSON: `<n>. <name> (projectSlug: <slug>)` per line, prefaced by
+// "Projects followed:" and tailed with usage instructions for the model. We
+// parse it by matching this line shape exactly.
+var followedProjectLine = regexp.MustCompile(`^\d+\.\s+(.+?)\s+\(projectSlug:\s+(.+?)\)\s*$`)
 
 type mcpClient struct {
 	cmd     *exec.Cmd
@@ -110,16 +118,30 @@ func summarizeContent(cs []mcp.Content) string {
 	return "(no message)"
 }
 
-// ListFollowedProjects calls the MCP `list_followed_projects` tool. The server
-// returns a JSON object whose `projects` field is the list we want.
+// ListFollowedProjects calls the MCP `list_followed_projects` tool and parses
+// its prose response (see followedProjectLine for the format).
 func (m *mcpClient) ListFollowedProjects(ctx context.Context) ([]apiFollowedProject, error) {
-	var resp struct {
-		Projects []apiFollowedProject `json:"projects"`
-	}
-	if err := m.callJSON(ctx, "list_followed_projects", map[string]any{}, &resp); err != nil {
+	text, err := m.callText(ctx, "list_followed_projects", map[string]any{})
+	if err != nil {
 		return nil, err
 	}
-	return resp.Projects, nil
+	return parseFollowedProjects(text), nil
+}
+
+func parseFollowedProjects(text string) []apiFollowedProject {
+	var projects []apiFollowedProject
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		match := followedProjectLine.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		projects = append(projects, apiFollowedProject{
+			Name: strings.TrimSpace(match[1]),
+			Slug: strings.TrimSpace(match[2]),
+		})
+	}
+	return projects
 }
 
 func (m *mcpClient) GetBuildFailureLogs(ctx context.Context, slug, branch string) (string, error) {
