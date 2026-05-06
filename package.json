@@ -1,0 +1,41 @@
+{
+  "name": "circleci-tui",
+  "version": "0.0.1",
+  "description": "A tiny CircleCI TUI — like opencode for builds. Lightweight as fuck.",
+  "bin": {
+    "circleci-tui": "bin/circleci-tui"
+  },
+  "scripts": {
+    "postinstall": "node bin/install.js"
+  },
+  "files": [
+    "bin/install.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "circleci",
+    "tui",
+    "ci",
+    "dashboard",
+    "mcp"
+  ],
+  "homepage": "https://github.com/agustinfranchetti/circleci-tui",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agustinfranchetti/circleci-tui.git"
+  },
+  "license": "MIT",
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

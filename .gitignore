@@ -1,0 +1,8 @@
+circleci-tui
+circleci-tui.exe
+/dist/
+/bin/circleci-tui
+/bin/circleci-tui.exe
+node_modules/
+*.log
+.DS_Store
